@@ -245,7 +245,7 @@ sequenceDiagram
 - 抓取时间窗：`hours`
   - 示例：`scrapy crawl techcrunch_api -a hours=72`
 - API 翻页范围：`start_requests` 中的 `range(1, 11)` 与 `per_page=20`
-- 入库连接：`AI_NEWS_MYSQL_*` 环境变量
+- 入库连接：`MYSQL_*` 环境变量
   - 包括 `host`、`port`、`user`、`password`、`db`、`table`
 
 ### 5.3 常见故障定位
@@ -253,7 +253,7 @@ sequenceDiagram
 #### 有抓取日志，但数据库没有数据
 
 - 先检查 `TechCrunchMySQLPipeline connect failed` 相关日志。
-- 确认任务环境变量 `AI_NEWS_MYSQL_HOST`、`AI_NEWS_MYSQL_PORT`、`AI_NEWS_MYSQL_USER`、`AI_NEWS_MYSQL_PASSWORD`、`AI_NEWS_MYSQL_DB` 是否正确。
+- 确认任务环境变量 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DB` 是否正确。
 
 #### 抓不到新文章
 

@@ -29,12 +29,12 @@ def parse_args():
         action="store_true",
         help="调用AI并实际写数据库；默认只列出候选记录，不调用AI",
     )
-    parser.add_argument("--db-host", default=os.getenv("AI_NEWS_MYSQL_HOST", ""))
-    parser.add_argument("--db-port", type=int, default=int(os.getenv("AI_NEWS_MYSQL_PORT", "0")))
-    parser.add_argument("--db-user", default=os.getenv("AI_NEWS_MYSQL_USER", ""))
-    parser.add_argument("--db-password", default=os.getenv("AI_NEWS_MYSQL_PASSWORD", ""))
-    parser.add_argument("--db-name", default=os.getenv("AI_NEWS_MYSQL_DB", ""))
-    parser.add_argument("--db-table", default=os.getenv("AI_NEWS_MYSQL_TABLE", ""))
+    parser.add_argument("--db-host", default=os.getenv("MYSQL_HOST", ""))
+    parser.add_argument("--db-port", type=int, default=int(os.getenv("MYSQL_PORT", "0")))
+    parser.add_argument("--db-user", default=os.getenv("MYSQL_USER", ""))
+    parser.add_argument("--db-password", default=os.getenv("MYSQL_PASSWORD", ""))
+    parser.add_argument("--db-name", default=os.getenv("MYSQL_DB", ""))
+    parser.add_argument("--db-table", default=os.getenv("MYSQL_TABLE", ""))
     return parser.parse_args()
 
 

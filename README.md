@@ -27,7 +27,7 @@ python -m scrapy crawl bvp
 
 `news/.env.local.json` 只供本地使用，自动加载且不覆盖已有环境变量。真实密码、API key、平台认证和 `.crawlab/` 持久化数据不会提交 Git；示例文件不含凭据。
 
-线上 Crawlab 任务通过环境变量设置 `AI_NEWS_MYSQL_*`、`OPENAI_*`（或 `AZURE_OPENAI_*`）；需要邮件时配置 `SMTP_*`，需要代理时配置 `KUAIDAILI_PROXY_URL` 等。更新工具不会上传本地配置，首次部署此版本前应在任务或节点环境中配置所需凭据。GitHub 代码发布不修改现有线上任务。
+线上 Crawlab 任务通过环境变量设置 `MYSQL_*`、`OPENAI_*`（或 `AZURE_OPENAI_*`）；需要邮件时配置 `SMTP_*`，需要代理时配置 `KUAIDAILI_PROXY_URL` 等。更新工具不会上传本地配置，首次部署此版本前应在任务或节点环境中配置所需凭据。GitHub 代码发布不修改现有线上任务。
 
 ## 上传与维护
 

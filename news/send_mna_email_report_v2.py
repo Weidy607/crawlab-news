@@ -99,12 +99,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--days", type=int, help=argparse.SUPPRESS)  # 兼容旧任务；报告周期以 --period 为准
     parser.add_argument("--max-items", type=int, default=1000)
     parser.add_argument("--candidate-limit", type=int, default=1000)
-    parser.add_argument("--db-host", default=os.getenv("AI_NEWS_MYSQL_HOST", ""))
-    parser.add_argument("--db-port", type=int, default=int(os.getenv("AI_NEWS_MYSQL_PORT", "0")))
-    parser.add_argument("--db-user", default=os.getenv("AI_NEWS_MYSQL_USER", ""))
-    parser.add_argument("--db-password", default=os.getenv("AI_NEWS_MYSQL_PASSWORD", ""))
-    parser.add_argument("--db-name", default=os.getenv("AI_NEWS_MYSQL_DB", ""))
-    parser.add_argument("--db-table", default=os.getenv("AI_NEWS_MYSQL_TABLE", ""))
+    parser.add_argument("--db-host", default=os.getenv("MYSQL_HOST", ""))
+    parser.add_argument("--db-port", type=int, default=int(os.getenv("MYSQL_PORT", "0")))
+    parser.add_argument("--db-user", default=os.getenv("MYSQL_USER", ""))
+    parser.add_argument("--db-password", default=os.getenv("MYSQL_PASSWORD", ""))
+    parser.add_argument("--db-name", default=os.getenv("MYSQL_DB", ""))
+    parser.add_argument("--db-table", default=os.getenv("MYSQL_TABLE", ""))
     parser.add_argument("--analysis-table", default=os.getenv("MNA_ANALYSIS_TABLE", "mna_news_analysis"))
     parser.add_argument("--report-runs-table", default=os.getenv("MNA_REPORT_RUNS_TABLE", "mna_report_runs"))
     parser.add_argument("--refresh-analysis", action="store_true", help="忽略数据库分析缓存并重新调用AI")
@@ -469,7 +469,6 @@ def request_ai_classification_batches(
                 {"role": "system", "content": "你只依据提供的新闻正文进行并购核验和分析，并输出严格合法的 JSON。"},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0,
             "max_completion_tokens": int(os.getenv("MNA_REPORT_AI_MAX_TOKENS", "12000")),
         }
         print(f"[v2] ai_batch={batch_number}/{total_batches} candidates={len(candidates)}")
@@ -1816,7 +1815,6 @@ def translate_report_texts(texts: Sequence[str]) -> Dict[str, str]:
                             {"role": "system", "content": "You are a precise financial translator."},
                             {"role": "user", "content": prompt},
                         ],
-                        "temperature": 0,
                         "max_completion_tokens": int(os.getenv("MNA_REPORT_TRANSLATION_MAX_TOKENS", "12000")),
                     },
                     timeout=(10, 120),

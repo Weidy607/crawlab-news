@@ -121,13 +121,11 @@ MYSQL_DICT = {
 # TechCrunch API -> ai_news (MySQL)
 # ------------------------------------------------------------
 AI_NEWS_MYSQL = {
-    # Use dedicated env vars first; fall back to project MySQL settings.
-    # In Docker, prefer host-gateway alias over bridge IP guessing.
-    'host': os.getenv('AI_NEWS_MYSQL_HOST', 'host.docker.internal'),
-    'port': int(os.getenv('AI_NEWS_MYSQL_PORT', '3306')),
-    'user': os.getenv('AI_NEWS_MYSQL_USER', 'quick-spider-admin'),
-    "password": os.getenv("AI_NEWS_MYSQL_PASSWORD", ""),
-    'db': os.getenv('AI_NEWS_MYSQL_DB', 'quick-spider-admin'),
-    'table': os.getenv('AI_NEWS_MYSQL_TABLE', 'ai_news'),
+    'host': os.getenv('MYSQL_HOST', 'host.docker.internal'),
+    'port': int(os.getenv('MYSQL_PORT', '3306')),
+    'user': os.getenv('MYSQL_USER', 'quick-spider-admin'),
+    "password": os.getenv("MYSQL_PASSWORD", ""),
+    'db': os.getenv('MYSQL_DB', 'quick-spider-admin'),
+    'table': os.getenv('MYSQL_TABLE', 'ai_news'),
     'charset': 'utf8mb4',
 }

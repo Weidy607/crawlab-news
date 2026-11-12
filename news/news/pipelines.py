@@ -317,7 +317,7 @@ class TechCrunchMySQLPipeline(object):
             self.cursor = None
             spider.logger.error("TechCrunchMySQLPipeline connect failed: %s", e)
             spider.logger.error(
-                "Set AI_NEWS_MYSQL_HOST/PORT/USER/PASSWORD/DB in task env; spider will continue without DB write."
+                "Set MYSQL_HOST/PORT/USER/PASSWORD/DB in task env; spider will continue without DB write."
             )
 
     def close_spider(self, spider):
