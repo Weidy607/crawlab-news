@@ -1,0 +1,28 @@
+version: '3.3'
+services:
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawlab
+    image: crawlabteam/crawlab:0.6.2-custom
+    container_name: crawlab_example_master
+    environment:
+      CRAWLAB_NODE_MASTER: "Y"
+      CRAWLAB_MONGO_HOST: "mongo"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - "./.crawlab/master:/root/.crawlab"
+    ports:
+      - "18803:8080"
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:4.2
+    container_name: crawlab_example_mongo
+    ports:
+      - "127.0.0.1:27017:27017"
+    restart: always
+    volumes:
+      - "./.crawlab/mongo/data:/data/db"   # MongoDB 数据持久化

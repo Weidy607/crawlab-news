@@ -1,0 +1,9 @@
+techcrunch_api=69db744ea613fd3f28229b6e|CMD=scrapy crawl techcrunch_api
+a16z=69ff36c8a613fd3f28229cb4|CMD=scrapy crawl a16z
+bvp=69ff414fa613fd3f28229ce1|CMD=scrapy crawl bvp
+hongshan=69ff4393a613fd3f28229ce5|CMD=scrapy crawl hongshan
+thomabravo=69ff4706a613fd3f28229cec|CMD=scrapy crawl thomabravo
+crunchbase=6a1ee15da613fd3f2822a271|CMD=scrapy crawl crunchbase
+techstartups=69ff0394a613fd3f28229c81|CMD=scrapy crawl techstartups
+email_report=6a20d7a7a613fd3f2822a325|CMD=scrapy crawl email_report
+panews=6a7a9bae253edcc2a1cb8b19|CMD=scrapy crawl panews

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Crawlab 工程管家"
+  short_description: "维护当前 Crawlab 工程，新增新闻爬虫、排查故障并管理代码上传与任务映射"
+  default_prompt: "使用 $crawlab-manager 按工程现有约定完成这次爬虫开发或维护，自动处理常规选择并验证结果。"
+policy:
+  allow_implicit_invocation: true

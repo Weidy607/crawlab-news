@@ -1,0 +1,6 @@
+FROM crawlabteam/crawlab:0.6.2
+
+# Install spider runtime dependencies into Crawlab node image.
+COPY news/requirements.txt /tmp/news-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/news-requirements.txt && \
+    rm -f /tmp/news-requirements.txt

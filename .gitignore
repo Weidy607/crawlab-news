@@ -1,0 +1,30 @@
+# Local Crawlab credentials and persistent databases
+.crawlab/
+.env
+.env.*
+!.env.example.json
+!**/.env.example.json
+
+# Generated reports and development artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv*/
+*.swp
+*.log
+*preview*.html
+*preview*.png
+
+# Standalone Python development artifacts
+.envrc
+.scrapy/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
