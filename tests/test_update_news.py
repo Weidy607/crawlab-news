@@ -17,7 +17,7 @@ class UpdateNewsTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.project = Path(self.temporary.name) / "news"
         (self.project / "news/spiders").mkdir(parents=True)
-        for relative in ("scrapy.cfg", "requirements.txt", "azure_ai.py", "send_email_report.py",
+        for relative in ("scrapy.cfg", "requirements.txt", "azure_ai.py", "news_tagging.py", "send_email_report.py",
                          "news/settings.py", "news/pipelines.py"):
             (self.project / relative).write_text("", encoding="utf-8")
         (self.project / "news/spiders/sources.py").write_text(

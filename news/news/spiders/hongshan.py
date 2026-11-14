@@ -325,7 +325,4 @@ class HongshanSpider(BaseSpider):
             seen.add(text)
             parts.append(text)
 
-        content_text = "\n".join(parts).strip()
-        if len(content_text) > 4000:
-            content_text = content_text[:4000] + "..."
-        return content_text
+        return "\n".join(parts).strip()

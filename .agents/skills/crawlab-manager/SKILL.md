@@ -47,6 +47,13 @@ python "<skill-dir>/scripts/inventory.py" --root "<crawlab-root>"
 
 以代码和实际命令为准；`docs/` 可能保留历史记录。名称和 ID 每次读取，不复制本技能中的过期清单。不要重建已移除的 `news/news/Makefile`、旧 `atlproc`、`companydb` 等工具。
 
+## 生成物目录
+
+- 本地生成的预览 HTML、审核 JSON、抓取样本、导出数据、截图、日志和调试结果统一放在工程根目录 `output/`，可按任务建立子目录；不要散落在根目录、`news/`、`scripts/` 或技能目录。源码、配置模板和维护文档保留原位置。
+- 脚本默认输出路径以工程位置确定，不随启动命令的当前目录变化。新闻报告复用 `news/output_paths.py`；Crawlab 独立部署仅包含 `news/` 时，使用该任务项目根下的 `output/`，不要写到其他任务目录。用户明确指定其他输出路径时遵循用户指示。
+- 一次性验证脚本也必须将交付文件和调试结果写入 `output/`；审核 JSON 与对应 HTML 放在一起。迁移已有生成物时保留内容，并更新相关路径和交付链接。
+- `output/` 不提交 Git、不进入 Docker 构建上下文，也不上传 Crawlab。生成前创建必要目录；完成后提供指向实际 `output/` 文件的链接。
+
 ## 新增或修复爬虫
 
 按 [references/spiders.md](references/spiders.md) 实施：先验证站点实际结构，选择 API、RSS 或列表页方案，复用现有基类与字段，接入现有 pipeline，完成有限验证与命令登记。不要复制整套项目或为每个来源重复写 AI、数据库连接。

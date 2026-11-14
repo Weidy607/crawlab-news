@@ -346,10 +346,7 @@ class TechCrunchApiSpider(BaseSpider):
             seen.add(text)
             paragraphs.append(text)
 
-        content_text = " ".join(paragraphs).strip()
-        if len(content_text) > 2000:
-            content_text = content_text[:2000] + "..."
-        return content_text
+        return "\n".join(paragraphs).strip()
 
     def _fetch_from_rss(self):
         rss_url = "https://techcrunch.com/feed/"
@@ -404,7 +401,6 @@ class TechCrunchApiSpider(BaseSpider):
                 summary = getattr(entry, "summary", "")
                 summary_text = self._strip_html(summary)
                 content_summary = summary_text[:300] + "..." if len(summary_text) > 300 else summary_text
-                ai_summary = summary_text[:200] + "..." if len(summary_text) > 200 else summary_text
 
                 row = {
                     "标题(中文)": "",
@@ -417,7 +413,7 @@ class TechCrunchApiSpider(BaseSpider):
                     "内容摘要(中文)": "",
                     "内容摘要(英文)": content_summary,
                     "AI摘要(中文)": "",
-                    "AI摘要(英文)": ai_summary,
+                    "AI摘要(英文)": "",
                     "完整内容(英文)": "",
                 }
 

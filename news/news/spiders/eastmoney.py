@@ -201,7 +201,7 @@ class EastmoneySpider(BaseSpider):
             return
 
         pub_date = published.astimezone(CHINA_TZ).strftime("%Y-%m-%d") if published else ""
-        tags = self._classify_tags(title, summary + " " + content[:2000])
+        tags = ""  # Shared ingestion AI classifies the complete article.
         row = {
             "标题(中文)": title,
             "标题(英文)": "",
@@ -212,7 +212,7 @@ class EastmoneySpider(BaseSpider):
             "标签": tags,
             "内容摘要(中文)": summary[:1000],
             "内容摘要(英文)": "",
-            "AI摘要(中文)": summary[:1000],
+            "AI摘要(中文)": "",
             "AI摘要(英文)": "",
             # The shared pipeline stores this neutral full-text field in ai_news.content_full.
             "完整内容(英文)": content,
@@ -344,22 +344,7 @@ class EastmoneySpider(BaseSpider):
                 continue
             seen.add(text)
             paragraphs.append(text)
-        return " ".join(paragraphs).strip()[:12000]
-
-    def _classify_tags(self, title: str, content: str) -> str:
-        text = f"{title} {content}".lower()
-        mapping = {
-            "AI": ("人工智能", "ai", "大模型", "算力"),
-            "Funding": ("融资", "募资", "投资", "估值"),
-            "M&A": ("并购", "收购", "合并", "控股"),
-            "IPO": ("ipo", "上市", "招股"),
-            "Semiconductor": ("芯片", "半导体", "gpu"),
-            "Cloud Computing": ("云计算", "数据中心", "saas"),
-            "Cybersecurity": ("网络安全", "数据泄露", "勒索软件"),
-            "Robotics": ("机器人", "具身智能"),
-        }
-        hits = [tag for tag, words in mapping.items() if any(word in text for word in words)]
-        return ", ".join(hits[:3]) if hits else "Other"
+        return " ".join(paragraphs).strip()
 
     @staticmethod
     def _clean_text(value) -> str:

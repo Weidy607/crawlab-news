@@ -338,7 +338,4 @@ class TechStartupsSpider(BaseSpider):
 			seen.add(text)
 			paragraphs.append(text)
 
-		content_text = " ".join(paragraphs).strip()
-		if len(content_text) > 2000:
-			content_text = content_text[:2000] + "..."
-		return content_text
+		return "\n".join(paragraphs).strip()

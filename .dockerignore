@@ -1,5 +1,7 @@
 .git/
 .crawlab/
+output/
+**/output/
 .env
 .env.*
 **/.env

@@ -9,13 +9,14 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import pymongo
 import pymysql
 from pyquery import PyQuery as pq
 import json
 
 from scrapy.exceptions import DropItem
+from news_tagging import (METADATA_COLUMN, classify_news_for_storage, ensure_metadata_column, report_row)
 
 from news.items import CommentItem
 from news.utils.timefinder import TimeFinder
@@ -275,8 +276,8 @@ class TechCrunchMySQLPipeline(object):
         self._supports_content_full = False
         self._summarize_text_en = None
         self._summarize_text_zh = None
+        self._summarize_news_bilingual = None
         self._translate_text_azure = None
-        self._classify_tags_azure = None
         self._warned_ai_enrich = False
         table_name = self.mysql_cfg.get("table", "ai_news")
         if not re.match(r"^[A-Za-z0-9_]+$", str(table_name)):
@@ -301,6 +302,7 @@ class TechCrunchMySQLPipeline(object):
                 read_timeout=30,
                 write_timeout=30,
             )
+            ensure_metadata_column(self.conn, self.table_name)
             self.cursor = self.conn.cursor(pymysql.cursors.DictCursor)
             self.cursor.execute(f"SHOW COLUMNS FROM `{self.table_name}` LIKE 'content_full'")
             self._supports_content_full = bool(self.cursor.fetchone())
@@ -401,29 +403,25 @@ class TechCrunchMySQLPipeline(object):
             return None
 
     def _init_ai_enrichment(self, spider):
-        """
-        Optional enhancer to mimic legacy flow:
-        - summarize full content to english summary
-        - translate english summary to chinese summary
-        """
+        """Load shared, grounded bilingual summarization and existing translation/tagging."""
         try:
             from azure_ai import (
-                classify_tags_azure,
                 summarize_text_en,
                 summarize_text_zh,
+                summarize_news_bilingual,
                 translate_text_azure,
             )
 
             self._summarize_text_en = summarize_text_en
             self._summarize_text_zh = summarize_text_zh
+            self._summarize_news_bilingual = summarize_news_bilingual
             self._translate_text_azure = translate_text_azure
-            self._classify_tags_azure = classify_tags_azure
             spider.logger.info("AI enrichment module loaded: azure_ai")
         except Exception as e:
             self._summarize_text_en = None
             self._summarize_text_zh = None
+            self._summarize_news_bilingual = None
             self._translate_text_azure = None
-            self._classify_tags_azure = None
             spider.logger.warning("AI enrichment unavailable, using fallback summaries only: %s", e)
 
     def _fallback_summary_en(self, content_full, max_chars=300):
@@ -489,12 +487,36 @@ class TechCrunchMySQLPipeline(object):
 
     def _enrich_summaries(self, row, spider):
         content_full = self._safe_str(row.get("content_full"))
+        shared_attempted = bool(content_full and self._summarize_news_bilingual)
+        if shared_attempted:
+            # Replace incoming AI fields only with this request's model result.
+            # Source quality and editorial decisions come from the model prompt.
+            row["ai_summary_zh"] = row["ai_summary_en"] = ""
+            try:
+                result = self._summarize_news_bilingual(content_full, max_length=300)
+                if result.get("status") == "ok" and all(result.get(lang) for lang in ("zh", "en")):
+                    row["ai_summary_zh"] = result["zh"]
+                    row["ai_summary_en"] = result["en"]
+                    if result.get("source_quality") == "incomplete":
+                        spider.logger.warning("正文资料不完整，摘要仅依据可验证事实 url=%s reason=%s", row.get("url"), result.get("reason"))
+                elif result.get("status") == "insufficient":
+                    row["ai_summary_zh"] = row["ai_summary_en"] = ""
+                    spider.logger.warning("正文不足，未生成AI摘要 url=%s reason=%s", row.get("url"), result.get("reason"))
+                else:
+                    spider.logger.warning("双语摘要未生成，未将正文摘录标为AI摘要 url=%s status=%s", row.get("url"), result.get("status"))
+            except Exception as exc:
+                spider.logger.warning("双语摘要失败 url=%s error=%s", row.get("url"), type(exc).__name__)
+
+        # Only fill missing content-summary fields; retain source-provided descriptions.
+        for language in ("zh", "en"):
+            if not row.get(f"content_summary_{language}") and row.get(f"ai_summary_{language}"):
+                row[f"content_summary_{language}"] = row[f"ai_summary_{language}"]
 
         if not row.get("content_summary_en"):
             summary_en = ""
             if row.get("content_summary_zh") and self._translate_text_azure:
                 summary_en = self._translate_checked(row["content_summary_zh"], "en", spider)
-            if not summary_en and content_full and self._summarize_text_en:
+            if not summary_en and content_full and self._summarize_text_en and not shared_attempted:
                 try:
                     summary_en = self._safe_str(self._summarize_text_en(content_full, max_length=200))
                 except Exception as e:
@@ -518,7 +540,7 @@ class TechCrunchMySQLPipeline(object):
 
         # AI fields must contain actual model output. Never relabel source meta
         # descriptions or locally extracted content summaries as AI summaries.
-        if not row.get("ai_summary_zh") and content_full and self._summarize_text_zh:
+        if not shared_attempted and not row.get("ai_summary_zh") and content_full and self._summarize_text_zh:
             try:
                 row["ai_summary_zh"] = self._safe_str(
                     self._summarize_text_zh(content_full, max_length=300)
@@ -528,7 +550,7 @@ class TechCrunchMySQLPipeline(object):
                     spider.logger.warning("summarize_text_zh failed: %s", exc)
                     self._warned_ai_enrich = True
 
-        if not row.get("ai_summary_en") and row.get("ai_summary_zh") and self._translate_text_azure:
+        if not shared_attempted and not row.get("ai_summary_en") and row.get("ai_summary_zh") and self._translate_text_azure:
             row["ai_summary_en"] = self._translate_checked(
                 row["ai_summary_zh"], "en", spider
             )
@@ -547,52 +569,13 @@ class TechCrunchMySQLPipeline(object):
         return chinese_count > 0
 
     def _classify_tags(self, row, spider):
-        if row.get("tags"):
-            return row["tags"]
-
-        title = self._safe_str(row.get("title_en"))
-        content = self._safe_str(row.get("content_full") or row.get("content_summary_en") or row.get("ai_summary_en"))
-
-        if self._classify_tags_azure:
-            try:
-                classified = self._safe_str(self._classify_tags_azure(title, content))
-                if classified:
-                    return classified
-            except Exception:
-                pass
-
-        text = f"{title} {content}".lower()
-        tag_keywords = {
-            "Cybersecurity": ["cybersecurity", "cyber", "security flaw", "security breach", "ransomware", "malware"],
-            "AI": ["artificial intelligence", " ai ", "ai model", "ai startup", "openai", "anthropic", "gpt"],
-            "Machine Learning": ["machine learning", "deep learning", "neural network"],
-            "Funding": ["funding", "raises", "raised", "investment", "series a", "series b", "seed round"],
-            "M&A": ["acquisition", "acquire", "acquired", "merger", "buyout"],
-            "IPO": ["ipo", "public offering", "listed shares"],
-            "Fintech": ["fintech", "banking", "payments", "lender", "finance"],
-            "Cloud Computing": ["cloud", "saas", "data center", "infrastructure"],
-            "Blockchain": ["blockchain", "crypto", "token", "bitcoin"],
-            "Semiconductor": ["semiconductor", "chip", "gpu"],
-            "Robotics": ["robot", "robotics", "humanoid"],
-            "Autonomous Driving": ["autonomous driving", "self-driving", "robotaxi"],
-            "E-commerce": ["e-commerce", "ecommerce", "marketplace", "online retail"],
-            "Enterprise Software": ["enterprise software", "b2b software", "workflow software"],
-            "Consumer Tech": ["consumer app", "mobile app", "social media", "creator platform"],
-            "Media": ["newsroom", "publisher", "media company", "streaming"],
-            "Space Tech": ["satellite", "rocket", "spacecraft", "space tech"],
-            "Biotech": ["biotech", "drug discovery", "therapeutic"],
-            "HealthTech": ["healthtech", "medical technology", "clinical"],
-            "EV": ["electric vehicle", "ev ", "battery"],
-            "Venture Capital": ["venture capital", "vc firm"],
-            "Private Equity": ["private equity", "buyout fund"],
-            "Big Data": ["big data", "analytics", "data platform"],
-        }
-
-        hits = []
-        for tag, keywords in tag_keywords.items():
-            if any(keyword in text for keyword in keywords):
-                hits.append(tag)
-        return ", ".join(hits[:3]) if hits else "Other"
+        # Always re-evaluate source-provided tags. No keyword fallback, snippet
+        # truncation or three-tag limit may determine report eligibility.
+        tags, metadata = classify_news_for_storage(report_row(row))
+        row[METADATA_COLUMN] = json.dumps(metadata, ensure_ascii=False)
+        if metadata["status"] != "ok":
+            spider.logger.warning("新闻分类待审核，已保留原文: %s (%s)", row.get("url"), metadata.get("reason"))
+        return tags
 
     def _sync_item_from_row(self, item, row):
         item["标题(中文)"] = row.get("title_zh", "")
@@ -636,6 +619,16 @@ class TechCrunchMySQLPipeline(object):
             "match_type": self._safe_str(data.get("match_type"))[:100],
         }
 
+        # Keep the article, but never persist a forecast/event date as a future
+        # publication date or replace it with the crawl date.
+        today = datetime.now(timezone(timedelta(hours=8))).date()
+        if row["publish_date"] and row["publish_date"] > today:
+            spider.logger.warning(
+                "Future publication date needs review; storing NULL: date=%s url=%s",
+                row["publish_date"], row["url"],
+            )
+            row["publish_date"] = None
+
         for field in (
             "title_zh", "title_en", "author", "tags", "content_summary_zh",
             "content_summary_en", "ai_summary_zh", "ai_summary_en", "content_full",
@@ -654,8 +647,7 @@ class TechCrunchMySQLPipeline(object):
             row["ai_summary_en"] = ""
 
         self._enrich_summaries(row, spider)
-        if not row["tags"]:
-            row["tags"] = self._classify_tags(row, spider)
+        row["tags"] = self._classify_tags(row, spider)
 
         if not row["match_type"]:
             first_tag = ""
@@ -706,14 +698,14 @@ class TechCrunchMySQLPipeline(object):
                     f"""
                     UPDATE `{self.table_name}`
                     SET title_zh=%s, title_en=%s, website=%s, publish_date=%s, author=%s,
-                        tags=%s, content_summary_zh=%s, content_summary_en=%s,
+                        tags=%s, email_report_metadata=%s, content_summary_zh=%s, content_summary_en=%s,
                         ai_summary_zh=%s, ai_summary_en=%s, content_full=%s, match_type=%s,
                         crawl_time=NOW(), updated_at=NOW()
                     WHERE id=%s
                     """,
                     (
                         row["title_zh"], row["title_en"], row["website"], row["publish_date"], row["author"],
-                        row["tags"], row["content_summary_zh"], row["content_summary_en"],
+                        row["tags"], row[METADATA_COLUMN], row["content_summary_zh"], row["content_summary_en"],
                         row["ai_summary_zh"], row["ai_summary_en"], row["content_full"], row["match_type"],
                         exists["id"],
                     ),
@@ -723,14 +715,14 @@ class TechCrunchMySQLPipeline(object):
                     f"""
                     UPDATE `{self.table_name}`
                     SET title_zh=%s, title_en=%s, website=%s, publish_date=%s, author=%s,
-                        tags=%s, content_summary_zh=%s, content_summary_en=%s,
+                        tags=%s, email_report_metadata=%s, content_summary_zh=%s, content_summary_en=%s,
                         ai_summary_zh=%s, ai_summary_en=%s, match_type=%s,
                         crawl_time=NOW(), updated_at=NOW()
                     WHERE id=%s
                     """,
                     (
                         row["title_zh"], row["title_en"], row["website"], row["publish_date"], row["author"],
-                        row["tags"], row["content_summary_zh"], row["content_summary_en"],
+                        row["tags"], row[METADATA_COLUMN], row["content_summary_zh"], row["content_summary_en"],
                         row["ai_summary_zh"], row["ai_summary_en"], row["match_type"],
                         exists["id"],
                     ),
@@ -740,17 +732,17 @@ class TechCrunchMySQLPipeline(object):
                 self.cursor.execute(
                     f"""
                     INSERT INTO `{self.table_name}` (
-                        title_zh, title_en, url, website, publish_date, author, tags,
+                        title_zh, title_en, url, website, publish_date, author, tags, email_report_metadata,
                         content_summary_zh, content_summary_en, ai_summary_zh, ai_summary_en,
                         content_full, match_type, crawl_time, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW()
                     )
                     """,
                     (
                         row["title_zh"], row["title_en"], row["url"], row["website"], row["publish_date"], row["author"],
-                        row["tags"], row["content_summary_zh"], row["content_summary_en"],
+                        row["tags"], row[METADATA_COLUMN], row["content_summary_zh"], row["content_summary_en"],
                         row["ai_summary_zh"], row["ai_summary_en"], row["content_full"], row["match_type"],
                     ),
                 )
@@ -758,17 +750,17 @@ class TechCrunchMySQLPipeline(object):
                 self.cursor.execute(
                     f"""
                     INSERT INTO `{self.table_name}` (
-                        title_zh, title_en, url, website, publish_date, author, tags,
+                        title_zh, title_en, url, website, publish_date, author, tags, email_report_metadata,
                         content_summary_zh, content_summary_en, ai_summary_zh, ai_summary_en,
                         match_type, crawl_time, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, NOW(), NOW(), NOW()
                     )
                     """,
                     (
                         row["title_zh"], row["title_en"], row["url"], row["website"], row["publish_date"], row["author"],
-                        row["tags"], row["content_summary_zh"], row["content_summary_en"],
+                        row["tags"], row[METADATA_COLUMN], row["content_summary_zh"], row["content_summary_en"],
                         row["ai_summary_zh"], row["ai_summary_en"], row["match_type"],
                     ),
                 )

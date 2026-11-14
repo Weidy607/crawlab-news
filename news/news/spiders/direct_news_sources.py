@@ -184,7 +184,7 @@ class DirectNewsMixin:
             # cleaned full body. A source description is not an AI summary.
             "AI摘要(中文)": "",
             "AI摘要(英文)": "",
-            "完整内容(英文)": content[:12000],
+            "完整内容(英文)": content,
             "match_type": "",
         }
         self._emitted += 1
@@ -278,10 +278,14 @@ class DirectNewsMixin:
         if not soup:
             return ""
         candidates = []
-        selectors = [*self.content_selectors, "article", "main", "[itemprop='articleBody']"]
+        selectors = [*self.content_selectors, "[itemprop='articleBody']", "article", "main"]
         for selector in selectors:
             try:
-                candidates.extend(soup.select(selector))
+                matches = soup.select(selector)
+                substantive = [node for node in matches if len(node.get_text(" ", strip=True)) >= 80]
+                if substantive:
+                    candidates = substantive
+                    break
             except Exception:
                 continue
         if not candidates:
@@ -297,13 +301,22 @@ class DirectNewsMixin:
             "script", "style", "nav", "footer", "aside", "iframe", "noscript", "button", "svg",
         ]):
             tag.decompose()
+        # Some sites (e.g. 同花顺) put all prose in bare text + <br>, with only
+        # the picture caption in <p>. Reading <p> nodes alone loses the real body.
+        for node in list(container.find_all("p")):
+            value = self._clean_text(node.get_text(" ", strip=True))
+            centered = "center" in str(node.get("style") or "").lower()
+            if centered and re.match(r"^(?:图\s*\d+|Figure\s*\d+)[\s：:.]", value, re.I):
+                node.decompose()
+        separator = "\u2029"
+        for node in container.find_all("br"):
+            node.replace_with(separator)
+        for node in container.find_all(["p", "div", "h1", "h2", "h3", "h4", "li", "tr"]):
+            node.insert_after(separator)
         paragraphs, seen = [], set()
-        nodes = container.find_all(["p", "h2", "h3", "h4", "li"])
-        if not nodes:
-            nodes = [container]
-        for node in nodes:
-            text = self._clean_text(node.get_text(" ", strip=True))
-            if len(text) < 20 or text in seen:
+        for line in container.get_text().split(separator):
+            text = self._clean_text(line)
+            if len(text) < 2 or text in seen:
                 continue
             lowered = text.lower()
             if len(text) < 100 and any(marker in lowered for marker in (
@@ -313,12 +326,12 @@ class DirectNewsMixin:
                 continue
             seen.add(text)
             paragraphs.append(text)
-        return " ".join(paragraphs).strip()[:12000]
+        return "\n".join(paragraphs).strip()
 
     @staticmethod
     def _strip_media_captions(value: str) -> str:
         """Remove leading photo captions that are not article facts."""
-        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        text = re.sub(r"[^\S\n]+", " ", str(value or "")).strip()
         caption_patterns = (
             r"^图左[：:].{0,100}?[；;，,]\s*图右[：:].{0,100}?[。.!！]\s*",
             r"^(?:图片|图像|照片)(?:来源|说明|注)[：:].{0,160}?[。.!！]\s*",
@@ -344,22 +357,6 @@ class DirectNewsMixin:
             except Exception:
                 continue
         return None
-
-    def _classify_tags(self, title: str, content: str) -> str:
-        text = f" {title} {content} ".lower()
-        mapping = {
-            "AI": ("人工智能", " ai ", "大模型", "算力", "openai"),
-            "Funding": ("融资", "募资", "估值", " funding", " raised ", "investment"),
-            "M&A": ("并购", "收购", "合并", " acquisition", " merger"),
-            "IPO": ("ipo", "上市", "招股"),
-            "Semiconductor": ("芯片", "半导体", "gpu"),
-            "Cybersecurity": ("网络安全", "数据泄露", "ransomware", "cybersecurity"),
-            "Robotics": ("机器人", "具身智能", "robotics"),
-            "Blockchain": ("区块链", "比特币", "以太坊", "crypto", "blockchain"),
-            "Travel": ("旅游", "酒店", "航空", "travel", "hotel", "airline"),
-        }
-        hits = [tag for tag, words in mapping.items() if any(word in text for word in words)]
-        return ", ".join(hits[:3]) if hits else "Other"
 
     def _canonical_article_url(self, value: str) -> str:
         parsed = urlparse(value)

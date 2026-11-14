@@ -3,7 +3,7 @@ import io
 import json
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -104,6 +104,21 @@ class SourceRepairsTest(unittest.TestCase):
             pipeline.open_spider(spider)
         self.assertEqual("host.docker.internal", connect.call_args.kwargs["host"])
         self.assertEqual(config, pipeline.mysql_cfg)
+
+    def test_future_publication_date_keeps_article_with_unknown_date(self):
+        pipeline = TechCrunchMySQLPipeline({})
+        spider = MagicMock(); spider.name = "laoyaoba"
+        tomorrow = (datetime.now(timezone(timedelta(hours=8))) + timedelta(days=1)).date()
+        data = {"链接": "https://www.laoyaoba.com/n/1109025", "标题(中文)": "芯片行业分析",
+                "发布日期": tomorrow.isoformat(), "完整内容(英文)": "保留的新闻正文"}
+        with patch.object(pipeline, "_enrich_summaries"), patch.object(pipeline, "_classify_tags", return_value="Industry Insight"):
+            row = pipeline._prepare_row(data, spider)
+            self.assertIsNone(row["publish_date"])
+            self.assertEqual("保留的新闻正文", row["content_full"])
+            self.assertEqual("芯片行业分析", row["title_zh"])
+            spider.logger.warning.assert_called_once()
+            data["发布日期"] = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            self.assertEqual(data["发布日期"], pipeline._prepare_row(data, spider)["publish_date"].isoformat())
 
 
 if __name__ == "__main__":

@@ -483,7 +483,7 @@ class A16zSpider(BaseSpider):
 			seen.add(text)
 			parts.append(text)
 
-		content_text = " ".join(parts).strip()
+		content_text = "\n".join(parts).strip()
 		if not content_text:
 			# Fallback: relax heading/cut heuristics and keep substantive paragraphs only.
 			fallback_parts = []
@@ -501,10 +501,5 @@ class A16zSpider(BaseSpider):
 				if any(k in low for k in ["subscribe", "discussion about this post", "read full story", "comments"]):
 					continue
 				fallback_parts.append(text)
-				if len(" ".join(fallback_parts)) >= 2000:
-					break
-			content_text = " ".join(fallback_parts).strip()
-
-		if len(content_text) > 2000:
-			content_text = content_text[:2000] + "..."
+			content_text = "\n".join(fallback_parts).strip()
 		return content_text

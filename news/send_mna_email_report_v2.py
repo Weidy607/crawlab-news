@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 import pymysql
 
 from news.settings import AI_NEWS_MYSQL
+from output_paths import report_output_path
 
 
 USER_AGENT = "MnaReportV2/1.0"
@@ -109,7 +110,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--report-runs-table", default=os.getenv("MNA_REPORT_RUNS_TABLE", "mna_report_runs"))
     parser.add_argument("--refresh-analysis", action="store_true", help="忽略数据库分析缓存并重新调用AI")
     parser.add_argument("--input-json", help="使用 JSON 回放，不读取数据库")
-    parser.add_argument("--output", help="HTML 输出路径；默认按报告周期自动命名")
+    parser.add_argument("--output", help="自定义 HTML 输出路径；默认在工程根目录 output/ 下按报告周期自动命名")
     parser.add_argument("--dry-run", action="store_true", help="只生成 preview，不发送邮件")
     parser.add_argument("--send", action="store_true", help="明确允许发送邮件")
     parser.add_argument("--email-to", default=None)
@@ -2022,7 +2023,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except Exception as exc:
             print(f"[v2] mom_comparison omitted: previous month could not be verified with the same methodology: {exc}")
     copy = period_copy(args.period)
-    output = Path(args.output or copy["file"]).resolve()
+    output = report_output_path(copy["file"], args.output)
     report_deals = deals[:args.max_items]
     report_previous_deals = previous_deals[:args.max_items] if previous_deals is not None else None
     report_html = render_email_html(

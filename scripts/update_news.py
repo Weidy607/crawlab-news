@@ -48,7 +48,7 @@ def load_tasks(path):
 
 
 def check_project(project, tasks):
-    for relative in ("scrapy.cfg", "requirements.txt", "azure_ai.py", "send_email_report.py",
+    for relative in ("scrapy.cfg", "requirements.txt", "azure_ai.py", "news_tagging.py", "send_email_report.py",
                      "news/settings.py", "news/pipelines.py", "news/spiders"):
         if not (project / relative).exists():
             raise ValueError(f"Missing project file: {project / relative}")
@@ -74,9 +74,10 @@ def check_project(project, tasks):
 
 def ignore_upload_files(directory, names):
     patterns = (
-        "__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".git", ".agents",
+        "__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".git", ".agents", "output",
         ".venv*", "venv", ".env", ".env.*", ".crawlab_tasks.map",
         "*.swp", "*.log", "test_*.py", "tests", "*preview*.html", "*preview*.png",
+        "*preview*.json", "*_summary_review.json", "*_industry_review.json",
     )
     return {name for name in names if any(fnmatch.fnmatch(name, pattern) for pattern in patterns)}
 

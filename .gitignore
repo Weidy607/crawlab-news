@@ -6,6 +6,7 @@
 !**/.env.example.json
 
 # Generated reports and development artifacts
+output/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -14,6 +15,8 @@ __pycache__/
 *.log
 *preview*.html
 *preview*.png
+*preview*_industry_review.json
+*_summary_review.json
 
 # Standalone Python development artifacts
 .envrc
