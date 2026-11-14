@@ -81,6 +81,7 @@ class DirectNewsMixin:
     list_urls = ()
     article_pattern = r"$^"
     content_selectors = ()
+    publication_selectors = ()
     use_requests_middleware = True
     default_timezone = CHINA_TZ
     max_articles_per_page = 120
@@ -154,6 +155,9 @@ class DirectNewsMixin:
         soup = BeautifulSoup(response.text, "html.parser") if BeautifulSoup else None
         title = self._extract_title(soup) or self._clean_text(response.meta.get("list_title"))
         published = self._extract_published_at(soup)
+        if published is None:
+            self.logger.warning("%s 未找到可靠发布时间，保留文章但发布日期留空 url=%s", self.source_name,
+                                response.url)
         if published and published < self.cutoff:
             self._time_filtered += 1
             return
@@ -261,18 +265,27 @@ class DirectNewsMixin:
                     continue
                 graph = item.get("@graph") if isinstance(item.get("@graph"), list) else []
                 for candidate in [item, *graph]:
-                    if isinstance(candidate, dict):
-                        parsed = self._parse_dt(candidate.get("datePublished") or candidate.get("dateCreated"))
-                        if parsed:
-                            return parsed
-        time_node = soup.find("time")
-        if time_node:
-            parsed = self._parse_dt(time_node.get("datetime") or time_node.get_text(" ", strip=True))
-            if parsed:
-                return parsed
-        text = soup.get_text(" ", strip=True)[:8000]
-        match = re.search(r"20\d{2}(?:[-/.年])\d{1,2}(?:[-/.月])\d{1,2}日?(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?", text)
-        return self._parse_dt(match.group(0)) if match else None
+                    if not isinstance(candidate, dict):
+                        continue
+                    kinds = candidate.get("@type", [])
+                    kinds = kinds if isinstance(kinds, list) else [kinds]
+                    if not any(isinstance(kind, str) and kind in {
+                        "Article", "NewsArticle", "BlogPosting", "Report", "AnalysisNewsArticle",
+                        "OpinionNewsArticle",
+                    } for kind in kinds):
+                        continue
+                    parsed = self._parse_dt(candidate.get("datePublished"))
+                    if parsed:
+                        return parsed
+        # Only known publication fields belong here. The first date/time on a
+        # page may describe a certificate, a bond maturity or a related article.
+        for selector in (*self.publication_selectors, "[itemprop='datePublished']", "time[pubdate]"):
+            for node in soup.select(selector):
+                parsed = self._parse_dt(node.get("content") or node.get("datetime")
+                                        or node.get_text(" ", strip=True))
+                if parsed:
+                    return parsed
+        return None
 
     def _extract_content(self, soup) -> str:
         if not soup:
@@ -345,16 +358,36 @@ class DirectNewsMixin:
         text = self._clean_text(value)
         if not text:
             return None
-        normalized = text.replace("年", "-").replace("月", "-").replace("日", "").replace("/", "-").replace(".", "-")
+        if re.fullmatch(r"\d{14}", text):
+            try:
+                return datetime.strptime(text, "%Y%m%d%H%M%S").replace(
+                    tzinfo=self.default_timezone).astimezone(timezone.utc)
+            except ValueError:
+                return None
+        # Normalize only the date component, preserving ISO fractional seconds
+        # and time-zone offsets. Require matching separators (not 2027年1.6T).
+        match = re.fullmatch(
+            r"(?P<year>\d{4})(?P<sep>[-/.])(?P<month>\d{1,2})(?P=sep)(?P<day>\d{1,2})"
+            r"(?P<time>(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)",
+            text,
+        ) or re.fullmatch(
+            r"(?P<year>\d{4})年(?P<month>\d{1,2})月(?P<day>\d{1,2})日"
+            r"(?P<time>(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)",
+            text,
+        )
+        if not match:
+            return None
+        normalized = (f"{int(match['year']):04d}-{int(match['month']):02d}-{int(match['day']):02d}"
+                      + match["time"])
         try:
             parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
             return parsed.replace(tzinfo=parsed.tzinfo or self.default_timezone).astimezone(timezone.utc)
-        except Exception:
+        except ValueError:
             pass
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
             try:
-                return datetime.strptime(normalized[:19], fmt).replace(tzinfo=self.default_timezone).astimezone(timezone.utc)
-            except Exception:
+                return datetime.strptime(normalized, fmt).replace(tzinfo=self.default_timezone).astimezone(timezone.utc)
+            except ValueError:
                 continue
         return None
 
@@ -481,6 +514,7 @@ class GuandianSpider(DirectNewsMixin, BaseSpider):
     allowed_domains = ["guandian.cn"]
     article_pattern = r"guandian\.cn/article/20\d{6}/\d+\.html$"
     content_selectors = (".article-content", ".detail-content", "#content", ".content")
+    publication_selectors = (".con_l_info_l > p",)
 
 
 class LaoyaobaSpider(DirectNewsMixin, BaseSpider):
@@ -490,3 +524,20 @@ class LaoyaobaSpider(DirectNewsMixin, BaseSpider):
     allowed_domains = ["laoyaoba.com"]
     article_pattern = r"laoyaoba\.com/n/\d+$"
     content_selectors = (".news-content", ".article-content", "#content", ".content")
+
+    def _extract_published_at(self, soup) -> Optional[datetime]:
+        if soup:
+            for script in soup.find_all("script"):
+                text = script.string or ""
+                match = re.search(r"\bvar\s+article_data\s*=\s*", text)
+                if not match:
+                    continue
+                try:
+                    data, _ = json.JSONDecoder().raw_decode(text[match.end():])
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(data, dict):
+                    parsed = self._parse_dt(data.get("published_time"))
+                    if parsed:
+                        return parsed
+        return super()._extract_published_at(soup)

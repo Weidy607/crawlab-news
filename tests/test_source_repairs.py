@@ -14,6 +14,8 @@ try:
     from news.spiders.bvp import BvpSpider
     from news.spiders.thomabravo import ThomabravoSpider, _looks_like_article
     from news.spiders.crunchbase import CrunchbaseSpider, FEEDS
+    from news.spiders.direct_news_sources import DirectNewsMixin, GuandianSpider, LaoyaobaSpider, PANewsSpider
+    from bs4 import BeautifulSoup
     from news.pipelines import TechCrunchMySQLPipeline
     RUNTIME_AVAILABLE = True
 except ImportError:
@@ -119,6 +121,61 @@ class SourceRepairsTest(unittest.TestCase):
             spider.logger.warning.assert_called_once()
             data["发布日期"] = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
             self.assertEqual(data["发布日期"], pipeline._prepare_row(data, spider)["publish_date"].isoformat())
+
+    def test_laoyaoba_uses_publication_not_update_time_or_optical_spec(self):
+        soup = BeautifulSoup('''<h1>光模块</h1><p>预计2027年1.6T翻倍</p>
+            <span class="published-time">09-17 18:08</span>
+            <script>var article_data = {"published_time":"20260917180845",
+                "update_time":"20261112182521"}; window.other = {};</script>''', "html.parser")
+        self.assertEqual(datetime(2026, 9, 17, 10, 8, 45, tzinfo=timezone.utc),
+                         LaoyaobaSpider()._extract_published_at(soup))
+
+    def test_guandian_uses_publication_field_not_certificate_expiry(self):
+        soup = BeautifulSoup('''<h1>注册证有效期至2031年11月9日</h1>
+            <div class="con_l_info_l"><p>2026-11-12 21:12</p></div>''', "html.parser")
+        self.assertEqual(datetime(2026, 11, 12, 13, 12, tzinfo=timezone.utc),
+                         GuandianSpider()._extract_published_at(soup))
+
+    def test_panews_preserves_iso_milliseconds_and_ignores_bond_maturity(self):
+        soup = BeautifulSoup('''<script type="application/ld+json">{"@type":"NewsArticle",
+            "datePublished":"2026-10-08T05:20:00.123Z"}</script>
+            <p>2056年8月15日到期的30年期国债</p>
+            <aside><time datetime="2026-11-14T05:25:00.373Z">推荐阅读</time></aside>''', "html.parser")
+        self.assertEqual(datetime(2026, 10, 8, 5, 20, 0, 123000, tzinfo=timezone.utc),
+                         PANewsSpider()._extract_published_at(soup))
+
+    def test_unknown_publication_does_not_use_body_dates_or_related_articles(self):
+        soup = BeautifulSoup('''<h1>注册证有效期至2031年11月9日</h1>
+            <p>预计2027年1.6T翻倍，2056年8月15日到期</p>
+            <aside><time datetime="2026-11-14T05:25:00Z">其他文章</time></aside>
+            <script type="application/ld+json">{"@graph":[
+                {"@type":"WebSite", "datePublished":"2026-11-14"},
+                {"@type":"Event", "dateCreated":"2026-11-14"},
+                {"@type":"Article", "dateCreated":"2026-11-14"}]}</script>''', "html.parser")
+        self.assertIsNone(DirectNewsMixin()._extract_published_at(soup))
+
+    def test_explicit_publication_metadata_is_supported(self):
+        for html in (
+            '<meta property="article:published_time" content="2026-11-12T21:12:00+08:00">',
+            '<span itemprop="datePublished" content="2026-11-12T21:12:00+08:00"></span>',
+            '<time pubdate datetime="2026-11-12T21:12:00+08:00"></time>',
+            '<script type="application/ld+json">{"@graph":[{"@type":"NewsArticle",'
+            '"datePublished":"2026-11-12T21:12:00+08:00"}]}</script>',
+        ):
+            with self.subTest(html=html):
+                self.assertEqual(datetime(2026, 11, 12, 13, 12, tzinfo=timezone.utc),
+                                 DirectNewsMixin()._extract_published_at(BeautifulSoup(html, "html.parser")))
+
+    def test_date_parser_accepts_whole_dates_without_changing_time_precision(self):
+        parser = DirectNewsMixin()
+        for text in ("2026-9-17 18:08:45", "2026/9/17 18:08:45", "2026.9.17 18:08:45",
+                     "2026年9月17日 18:08:45", "20260917180845", "2026-09-17T18:08:45+08:00"):
+            with self.subTest(text=text):
+                self.assertEqual(datetime(2026, 9, 17, 10, 8, 45, tzinfo=timezone.utc), parser._parse_dt(text))
+        for text in ("2027年1.6T", "2027年1.6", "2026-02-30", "2026-11-12 other text",
+                     "2026-11-12T01:02:03.000Z trailing", "09-17 18:08"):
+            with self.subTest(text=text):
+                self.assertIsNone(parser._parse_dt(text))
 
 
 if __name__ == "__main__":
