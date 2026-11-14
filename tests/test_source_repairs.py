@@ -137,12 +137,23 @@ class SourceRepairsTest(unittest.TestCase):
                          GuandianSpider()._extract_published_at(soup))
 
     def test_panews_preserves_iso_milliseconds_and_ignores_bond_maturity(self):
-        soup = BeautifulSoup('''<script type="application/ld+json">{"@type":"NewsArticle",
+        soup = BeautifulSoup('''<script type="application/ld+json">{"@type":"NewsArticle", "headline":"债市分析",
             "datePublished":"2026-10-08T05:20:00.123Z"}</script>
             <p>2056年8月15日到期的30年期国债</p>
             <aside><time datetime="2026-11-14T05:25:00.373Z">推荐阅读</time></aside>''', "html.parser")
         self.assertEqual(datetime(2026, 10, 8, 5, 20, 0, 123000, tzinfo=timezone.utc),
                          PANewsSpider()._extract_published_at(soup))
+
+    def test_panews_removed_article_does_not_use_request_time_or_recommendations(self):
+        html = '''<title>PANews | PANews</title>
+            <script type="application/ld+json">{"@type":"NewsArticle",
+            "datePublished":"2026-11-14T07:53:44.765Z",
+            "mainEntityOfPage":"https://www.panewslab.com/zh/articles/removed"}</script>
+            <main>去看看别的吧～ 热门文章 ''' + "推荐文章正文 " * 50 + '''</main>'''
+        spider = PANewsSpider()
+        self.assertIsNone(spider._extract_published_at(BeautifulSoup(html, "html.parser")))
+        self.assertEqual([], list(spider.parse_article(self.response(
+            "https://www.panewslab.com/zh/articles/removed", html))))
 
     def test_unknown_publication_does_not_use_body_dates_or_related_articles(self):
         soup = BeautifulSoup('''<h1>注册证有效期至2031年11月9日</h1>

@@ -422,6 +422,42 @@ class PANewsSpider(DirectNewsMixin, BaseSpider):
     article_pattern = r"panewslab\.com/zh/articles/[0-9a-z-]+$"
     content_selectors = ("[class*='article-content']", "[class*='rich-text']", ".prose")
 
+    @staticmethod
+    def _article_metadata(soup):
+        if not soup:
+            return None
+        for script in soup.select("script[type='application/ld+json']"):
+            try:
+                data = json.loads(script.string or "")
+            except (ValueError, TypeError):
+                continue
+            for item in data if isinstance(data, list) else [data]:
+                if not isinstance(item, dict):
+                    continue
+                graph = item.get("@graph") if isinstance(item.get("@graph"), list) else []
+                for candidate in [item, *graph]:
+                    if not isinstance(candidate, dict):
+                        continue
+                    kinds = candidate.get("@type")
+                    kinds = kinds if isinstance(kinds, list) else [kinds]
+                    headline = candidate.get("headline")
+                    if "NewsArticle" in kinds and isinstance(headline, str) and headline.strip():
+                        return candidate
+        return None
+
+    def _extract_published_at(self, soup) -> Optional[datetime]:
+        # PANews emits a NewsArticle with the current request time even for
+        # removed articles. Those placeholders have no headline and no article.
+        metadata = self._article_metadata(soup)
+        return self._parse_dt(metadata.get("datePublished")) if metadata else None
+
+    def parse_article(self, response):
+        soup = BeautifulSoup(response.text, "html.parser") if BeautifulSoup else None
+        if not self._article_metadata(soup):
+            self.logger.warning("PANews 页面无有效文章元数据，跳过失效页 url=%s", response.url)
+            return
+        yield from super().parse_article(response)
+
 
 class RFIDWorldSpider(DirectNewsMixin, BaseSpider):
     name = "rfidworld"
