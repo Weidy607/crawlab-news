@@ -40,7 +40,6 @@ class AllSourcesEmailReportTests(unittest.TestCase):
             rows = report.fetch_news(self.args)
         query, params = cursor.execute.call_args.args
         self.assertNotIn("TRIM(website)", query)
-        self.assertNotIn(original.INVEST_MNA_TAG_WHERE, query)
         self.assertNotIn("LIKE", query.upper())
         self.assertIn("DATE_SUB(CURDATE(), INTERVAL %s DAY)", query)
         self.assertIn("publish_date < DATE_ADD(CURDATE(), INTERVAL 1 DAY)", query)
@@ -59,7 +58,7 @@ class AllSourcesEmailReportTests(unittest.TestCase):
             original.fetch_invest_mna_news(self.args)
         query, params = cursor.execute.call_args.args
         self.assertIn("TRIM(website) IN", query)
-        self.assertEqual(list(original.DAILY_WEBSITE_ALLOWLIST), params[1:-1])
+        self.assertEqual(list(original.DAILY_WEBSITE_ALLOWLIST), params[1:])
 
     def test_complete_report_has_no_sql_item_limit(self):
         self.args.limit = 0
@@ -154,6 +153,35 @@ class AllSourcesEmailReportTests(unittest.TestCase):
             self.assertEqual(0, report.run_email_report(self.args))
         configured.assert_not_called()
         send.assert_not_called()
+
+    def test_empty_report_sends_notice_only_in_send_mode(self):
+        for send_requested, dry_run in ((True, False), (True, True), (False, False)):
+            with self.subTest(send=send_requested, dry_run=dry_run):
+                self.args.send = send_requested
+                self.args.dry_run = dry_run
+                with patch.object(report, "fetch_news", return_value=[]), patch.object(
+                    original, "get_recipients_by_language", return_value={}
+                ), patch.object(original, "email_enabled", return_value=True) as configured, patch.object(
+                    report, "send_report", return_value=True
+                ) as send:
+                    self.assertEqual(0, report.run_email_report(self.args))
+                self.assertIn("本期暂无符合条件的新闻", Path(self.args.output).read_text(encoding="utf-8"))
+                if send_requested and not dry_run:
+                    configured.assert_called_once_with(self.args)
+                    send.assert_called_once_with([], self.args)
+                else:
+                    configured.assert_not_called()
+                    send.assert_not_called()
+
+    def test_empty_report_send_failure_is_reported(self):
+        self.args.send = True
+        self.args.dry_run = False
+        with patch.object(report, "fetch_news", return_value=[]), patch.object(
+            original, "get_recipients_by_language", return_value={}
+        ), patch.object(original, "email_enabled", return_value=True), patch.object(
+            report, "send_report", return_value=False
+        ):
+            self.assertEqual(1, report.run_email_report(self.args))
 
     def test_report_uses_ingestion_bullets_without_ai_or_rewriting(self):
         text = "- GMI融资6.68亿美元。其平台每周处理4万亿tokens。\n- Groq融资3.5亿美元。公司正转型。"

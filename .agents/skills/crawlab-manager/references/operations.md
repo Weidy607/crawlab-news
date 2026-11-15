@@ -29,13 +29,23 @@
 
 批量脚本会制作同一份临时快照，排除缓存、测试、预览、`.env*` 和本地 ID 映射；上传或校验失败即停止，不重试或触发任务；当前条目可能已部分更新，修复后可重新上传。脚本不主动删除远端残留文件，首次大规模清理后的同步需另核对远端旧文件。当前脚本仅部署 map 中登记的任务，不代表平台中全部条目；未登记的条目应先确认 ID 与用途。
 
+## 日报筛选与邮件测试
+
+- `scrapy crawl email_report` 调用 `send_email_report.py`；全球投研日报使用 `send_all_sources_email_report.py`。两个日报共用 `news_tagging.filter_tagged_news()`，依据数据库保存的 `IT投研日报` 标签及 `email_report_metadata` 筛选，收录相关 IT/AI/软件/SaaS 的资本动态和行业研究，不再用融资、投资、并购等关键词预筛。筛选阶段不调用 AI。
+- 统一分类不代表统一来源或版面：原日报的 24 小时模式保留 `DAILY_WEBSITE_ALLOWLIST`，其他周期沿用现有来源范围；全球投研日报覆盖全来源、按国内外分组。未经用户要求，不扩展来源或替换各自邮件模板。
+- 两个日报按发布日期从数据库当天零点往前 `hours // 24` 天起、至明天零点前查询。原日报在分类后应用 `limit`，避免先截断候选造成漏报。分类缺失、待审核或内容已更新时停止发送并报告需补标；不能将读取或分类失败当作“无新闻”。
+- 查询与分类成功但结果为 0 条时，正常发送说明“本期暂无符合条件的新闻”的邮件，不跳过发送。`dry_run` 和预览模式仍不发送。
+- 区分发送入口：`scrapy crawl email_report` / `python send_email_report.py` 默认发送，可用 `dry_run=true` / `--dry-run` 只读验证；`python send_all_sources_email_report.py` 和 `python send_mna_email_report_v2.py` 默认预览，显式加 `--send` 才发送。制作技能或修改报告本身不授权发邮件。
+- 用户要求只发给测试邮箱时，用单次参数 `-a email_to=...`（Scrapy）或 `--email-to ...`（脚本）覆盖数据库和环境中的收件人；不改日常收件人、保存的任务命令或定时配置。Scrapy 测试发送可显式传 `-a dry_run=false`。
+- 测试发送后核对任务实际命令、日志中的新闻条数、唯一指定的收件人及 SMTP 成功人数；任务 `finished` 本身不证明邮件发送成功。发送请求超时后先查任务和日志，不直接重复发送。
+
 ## 环境与平台
 
 - `MYSQL_*` 控制新闻库连接，`OPENAI_*` / `AZURE_OPENAI_*` 控制 AI；沿用现有来源的配置覆盖规则。
 - 普通爬虫上传不等于安装新依赖。增加依赖时更新项目 requirements，并指出 Crawlab 节点需安装或重建镜像；未授权平台维护时不擅自重启容器。
 - 根 `Dockerfile.crawlab` 只安装 `news/requirements.txt`，不要重新加入外部 MNA 工程的依赖。
 - `.crawlab/master` 和 `.crawlab/mongo/data` 为配置/持久化目录，不当缓存清理。检查凭据只报告是否配置，不输出值。
-- `news/send_mna_email_report_v2.py` 是本工程的新闻并购报告，独立 MNA 工程负责交易所采集，两者互不依赖。邮件报告当前默认生成预览，需要 `--send` 才发送；只有用户明确要求发送时使用该参数。制作技能或修改报告不授权发邮件。
+- `news/send_mna_email_report_v2.py` 是本工程的新闻并购报告，独立 MNA 工程负责交易所采集，两者互不依赖。
 - 定时任务和正在运行的任务是独立状态，修改/停用前确认用户请求覆盖该动作。已有任务 ID 和历史数据不能仅因本地暂时不用而删除。
 
 ## 清理与完成判断

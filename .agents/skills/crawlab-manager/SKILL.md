@@ -40,6 +40,8 @@ python "<skill-dir>/scripts/inventory.py" --root "<crawlab-root>"
 | `news/news/spiders/direct_news_sources.py` | `DirectNewsMixin`、共享正文抽取及多个独立来源 |
 | `news/news/pipelines.py` | `TechCrunchMySQLPipeline`，清洗、AI 丰富化、MySQL 入库、同步输出字段 |
 | `news/azure_ai.py` | 翻译、摘要、标签公共入口 |
+| `news/news_tagging.py` | 入库分类、日报标签与分类元数据校验；两个日报共用筛选入口 |
+| `news/send_email_report.py`、`news/send_all_sources_email_report.py` | 原来源日报与全球投研日报，各自保留版面和来源范围 |
 | `news/Makefile`、`.crawlab_tasks.map` | 上传命令和已知远端任务映射 |
 | `scripts/update_news.py` | 标准库 API 更新入口，默认仅预览，`--check-remote` 核对目标，`--execute` 上传并校验文件 |
 | `crawlab.server.json` | 非敏感服务器地址和 news 项目 ID；认证仍读取本机 CLI 配置 |
@@ -60,6 +62,6 @@ python "<skill-dir>/scripts/inventory.py" --root "<crawlab-root>"
 
 ## 项目维护与上传
 
-按 [references/operations.md](references/operations.md) 处理任务映射、按来源上传、公共代码同步、运行环境与清理。Crawlab 中的 `news` 分组不代表各条任务共享代码；更新工具按任务 ID 上传完整项目。
+按 [references/operations.md](references/operations.md) 处理任务映射、按来源上传、公共代码同步、日报筛选与邮件测试、运行环境及清理。Crawlab 中的 `news` 分组不代表各条任务共享代码；更新工具按任务 ID 上传完整项目。
 
 新增或修改公共代码时，识别受影响来源；只有用户授权同步时才上传。在根目录运行 `python scripts/update_news.py` 预览，增加 `--execute` 执行；`--names a16z bvp` 限定任务。`make plan-update-all` 和 `make update-all` 是 news 目录下的对应入口。清理前核对配置字符串和导入链，保留 `.crawlab/` 持久化内容与用户仍使用的独立项目。

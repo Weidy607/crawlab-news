@@ -24,17 +24,8 @@ except ImportError:
 CURRENT_DIR = Path(__file__).resolve().parent
 
 from news.settings import AI_NEWS_MYSQL  # noqa: E402
+from news_tagging import FIELD_MAP, METADATA_COLUMN, filter_tagged_news, has_metadata_column  # noqa: E402
 
-
-INVEST_MNA_TAG_WHERE = """
-(
-    tags LIKE '%%融资%%' OR tags LIKE '%%投资%%' OR tags LIKE '%%风险投资%%'
-    OR tags LIKE '%%并购%%' OR tags LIKE '%%收购%%' OR tags LIKE '%%IPO%%'
-    OR tags LIKE '%%私募股权%%'
-    OR tags LIKE '%%funding%%' OR tags LIKE '%%investment%%' OR tags LIKE '%%venture%%'
-    OR tags LIKE '%%acquisition%%' OR tags LIKE '%%merger%%' OR tags LIKE '%%M&A%%'
-)
-""".strip()
 
 DAILY_WEBSITE_ALLOWLIST = (
     "36 Kr",
@@ -552,10 +543,20 @@ def markdown_to_html(markdown_content: str) -> str:
 
 
 def build_mna_digest_list_markdown(rows: List[Dict[str, Any]], period_name: str, language: str = "zh") -> str:
-    if not rows:
-        return f"No AI M&A related news for this {period_name.lower()}." if language == "en" else f"本{period_name}暂无AI领域并购相关资讯。"
-
     today = datetime.now().strftime("%Y-%m-%d")
+    if not rows:
+        if language == "en":
+            return (
+                f"# AI M&A Intelligence Monitor {period_name} - {today}\n\n"
+                "*0 AI/Investment/M&A related news items*\n\n"
+                "No matching AI/Investment/M&A news was found for this reporting period."
+            )
+        return (
+            f"# AI领域并购资讯监控{period_name} - {today}\n\n"
+            "*共0条AI/投资/并购相关新闻*\n\n"
+            "本期暂无符合条件的AI/投资/并购相关新闻。"
+        )
+
     content: List[str] = []
 
     if language == "en":
@@ -848,6 +849,7 @@ def connect_ai_news_mysql(mysql_cfg: Dict[str, Any]):
 
 
 def fetch_invest_mna_news(args: argparse.Namespace) -> List[Dict[str, Any]]:
+    """Use the global daily's stored classification within the original sources."""
     mysql_cfg = resolve_mysql_config(args)
     daily_website_filter = ""
     query_params: List[Any] = [args.hours // 24]
@@ -857,26 +859,13 @@ def fetch_invest_mna_news(args: argparse.Namespace) -> List[Dict[str, Any]]:
         query_params.extend(DAILY_WEBSITE_ALLOWLIST)
 
     query = f"""
-    SELECT
-        title_en,
-        title_zh,
-        url,
-        website,
-        publish_date,
-        author,
-        tags,
-        content_summary_en,
-        content_summary_zh,
-        ai_summary_en,
-        ai_summary_zh
+    SELECT {METADATA_COLUMN}, {', '.join(FIELD_MAP)}
     FROM `{mysql_cfg['table']}`
     WHERE publish_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-      AND {INVEST_MNA_TAG_WHERE}
+      AND publish_date < DATE_ADD(CURDATE(), INTERVAL 1 DAY)
       {daily_website_filter}
     ORDER BY publish_date DESC
-    LIMIT %s
     """
-    query_params.append(args.limit)
 
     cutoff_date = f"CURDATE() - {args.hours // 24} day(s)"
     print(
@@ -884,37 +873,34 @@ def fetch_invest_mna_news(args: argparse.Namespace) -> List[Dict[str, Any]]:
         f"host={mysql_cfg.get('host')} port={mysql_cfg.get('port')} "
         f"db={mysql_cfg.get('db')} table={mysql_cfg.get('table')}"
     )
-    print(f"publish_date 筛选: >= {cutoff_date} (hours={args.hours} → {args.hours // 24} 天)")
+    print(f"publish_date 筛选: >= {cutoff_date} 且 < 明天零点 (hours={args.hours} → {args.hours // 24} 天)")
     if daily_website_filter:
         print(f"日报 website 白名单 ({len(DAILY_WEBSITE_ALLOWLIST)}): {' | '.join(DAILY_WEBSITE_ALLOWLIST)}")
 
     connection = connect_ai_news_mysql(mysql_cfg)
     try:
         connection.ping(reconnect=True)
+        if not has_metadata_column(connection, mysql_cfg["table"]):
+            raise RuntimeError("数据库尚未补充日报标签，请先运行 backfill_news_tags.py --execute")
         with connection.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute(query, query_params)
             results = cursor.fetchall()
     finally:
         connection.close()
 
-    converted_results: List[Dict[str, Any]] = []
-    for row in results:
-        converted_results.append(
-            {
-                "标题(英文)": row.get("title_en", "") or "",
-                "标题(中文)": row.get("title_zh", "") or "",
-                "链接": row.get("url", "") or "",
-                "网站": row.get("website", "") or "",
-                "发布日期": str(row.get("publish_date", "")) if row.get("publish_date") else "",
-                "作者": row.get("author", "") or "",
-                "标签": row.get("tags", "") or "",
-                "内容摘要(英文)": row.get("content_summary_en", "") or "",
-                "内容摘要(中文)": row.get("content_summary_zh", "") or "",
-                "AI摘要(英文)": row.get("ai_summary_en", "") or "",
-                "AI摘要(中文)": row.get("ai_summary_zh", "") or "",
-            }
-        )
-    return converted_results
+    converted_results = [
+        {**{label: str(row.get(field) or "") for field, label in FIELD_MAP.items()},
+         METADATA_COLUMN: row.get(METADATA_COLUMN)}
+        for row in results
+    ]
+    selected, _ = filter_tagged_news(converted_results)
+    print(
+        f"数据库标签筛选结果: 候选 {len(converted_results)} 条，"
+        f"符合IT/AI/软件/SaaS {len(selected)} 条，排除 {len(converted_results) - len(selected)} 条"
+    )
+    # Apply the existing report limit after classification so excluded rows
+    # cannot hide eligible articles further down the candidate list.
+    return selected[:args.limit]
 
 
 def run_email_report(args: argparse.Namespace) -> int:
@@ -937,10 +923,9 @@ def run_email_report(args: argparse.Namespace) -> int:
         print(f"❌ 读取 ai_news 数据失败: {exc}")
         return 1
 
-    print(f"投资/并购相关新闻: {len(invest_mna_news)} 条")
+    print(f"IT投研相关新闻: {len(invest_mna_news)} 条")
     if not invest_mna_news:
-        print("⚠️ 没有可发送的新闻，跳过邮件发送")
-        return 0
+        print("ℹ️ 本期暂无符合条件的新闻，将发送无新闻通知邮件")
 
     invest_mna_news = group_rows_by_source(invest_mna_news)
     ordered_sources = []

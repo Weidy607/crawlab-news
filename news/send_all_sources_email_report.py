@@ -492,8 +492,7 @@ def run_email_report(args) -> int:
     for region, items in group_rows_by_region(rows).items():
         print(f"{REGION_LABELS['zh'][region]}: {len(items)} 条")
     if not rows:
-        print("没有符合条件的新闻，跳过发送")
-        return 0
+        print("本期暂无符合条件的新闻，将按发送模式发送无新闻通知邮件")
     if args.dry_run or not getattr(args, "send", False):
         print("预览模式，不发送邮件；发送需显式使用 --send")
         return 0
