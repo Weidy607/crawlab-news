@@ -43,10 +43,13 @@ SECTOR_LABELS = {
 }
 IT_SECTORS = {"AI_SOFTWARE_CLOUD", "SEMICONDUCTORS_INFRA"}
 REGIONS = ("中国", "北美", "欧洲", "亚太（不含中国）", "中东与非洲", "拉丁美洲", "跨区域", "未披露")
-CHINA_RELATIONS = ("中国境内交易", "中国企业海外并购", "外资收购中国标的", "非中国交易")
+CHINA_RELATIONS = ("中国境内交易", "中国企业海外并购", "外资收购中国标的", "非中国交易", "待核验")
 AMOUNT_BASES = {"TOTAL_CONSIDERATION", "EQUITY_VALUE", "ENTERPRISE_VALUE"}
 KNOWN_ENTITY_ALIASES = (
     {"nvidia", "英伟达", "辉达"},
+    {"bxdc", "黑石数字基础设施信托", "黑石的数据中心信托"},
+    {"隔空智能", "宁波隔空智能", "宁波隔空智能科技", "宁波隔空智能科技有限公司"},
+    {"钰泰股份", "钰泰半导体", "钰泰半导体股份有限公司"},
 )
 
 
@@ -83,13 +86,14 @@ class Deal:
     deal_evidence: str = ""
     amount_evidence: str = ""
     region: str = "未披露"
-    china_relation: str = "非中国交易"
+    china_relation: str = "待核验"
     transaction_date: Optional[date] = None
     amount_currency: str = "USD"
     amount_basis: str = "TOTAL_CONSIDERATION"
     transaction_facts: str = ""
     deal_analysis: str = ""
     narrative_evidence: List[str] = field(default_factory=list)
+    acquirer_region: str = "未披露"
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -308,8 +312,13 @@ def call_ai_for_classification(news: Sequence[News], include_excluded: bool = Fa
             "region": "中国|北美|欧洲|亚太（不含中国）|中东与非洲|拉丁美洲|跨区域|未披露",
             "region_evidence": "支持标的所属地区判断的原文；无法核验则为空字符串",
             "region_confidence": "high|medium|low",
-            "china_relation": "中国境内交易|中国企业海外并购|外资收购中国标的|非中国交易",
-            "china_evidence": "支持中国交易分类的原文；非中国或无法核验则为空字符串",
+            "acquirer_region": "中国|北美|欧洲|亚太（不含中国）|中东与非洲|拉丁美洲|跨区域|未披露",
+            "acquirer_region_evidence": "支持收购方总部或主要经营主体所在地的原文；无法核验则为空字符串",
+            "acquirer_region_confidence": "high|medium|low",
+            "acquirer_is_chinese": "true|false|null；仅判断收购方是否为中国主体，不要求确定具体国家或大洲",
+            "target_is_chinese": "true|false|null；仅判断标的是否为中国主体，不要求确定具体国家或大洲",
+            "china_relation": "中国境内交易|中国企业海外并购|外资收购中国标的|非中国交易|待核验",
+            "china_evidence": "支持交易双方所在地及中国关联分类的原文；无法核验则为空字符串",
             "china_confidence": "high|medium|low",
             "transaction_facts": "基于正文撰写的120–220字中文交易事实",
             "deal_analysis": "基于正文撰写的180–320字中文交易解读",
@@ -338,7 +347,9 @@ def open_db_connection(args: argparse.Namespace):
 
 
 def analysis_rule_version() -> str:
-    return os.getenv("MNA_ANALYSIS_RULE_VERSION", "mna-body-v6-20260907").strip() or "mna-body-v6-20260907"
+    base = os.getenv("MNA_ANALYSIS_RULE_VERSION", "mna-body-v6-20260907").strip() or "mna-body-v6-20260907"
+    # Keep the geography revision even when a deployment pins its base version.
+    return f"{base}-geo-v2-20261122"
 
 
 def news_content_hash(item: News) -> str:
@@ -455,11 +466,19 @@ def request_ai_classification_batches(
             "narrative_evidence 必须逐字复制 body 中支撑关键事实、财务数字和分析判断的原句，最多8条；没有正文依据的内容必须省略。"
             "如果 body 为空，可以用 existing_summary 判断是否为并购及提取基础字段，但 transaction_facts、deal_analysis 和 narrative_evidence 必须留空。"
             "每个候选 id 必须且只能出现一次：纳入的放入 deals，不纳入的放入 excluded 并给出明确原因，不得遗漏任何候选。"
-            "industry 必须按交易标的主营业务归入给定七类之一。region 按交易标的总部或主要经营地分类。"
+            "industry 必须按交易标的主营业务归入给定七类之一。region 按交易标的总部或主要经营地分类；"
+            "acquirer_region 单独判断收购方总部或主要经营主体所在地，不得用标的所在地代替。"
             "中国交易是全球交易的子集，不得从结果中剔除。只有原文能证明双方主要经营主体所在地时才可标记为中国境内交易、"
             "中国企业海外并购或外资收购中国标的，并逐字提供 china_evidence。若原文未写所在地，仅可对总部所在地广为人知、"
-            "无歧义的企业使用稳定公开知识补全，并将对应 confidence 设为 high、evidence 留空；任何不确定情况必须将 region 填未披露，"
-            "china_relation 填非中国交易，confidence 填 low。不得根据新闻语言、姓名或模糊印象猜测国别。"
+            "无歧义的企业使用稳定公开知识补全，并将对应 confidence 设为 high、evidence 留空。"
+            "中国范围包括中国大陆、香港、澳门和台湾；A股上市主体为中国企业，不能因正文未重复写国名而归为非中国交易。"
+            "必须分别核对交易双方；中国企业收购境外标的仍属于中国相关交易。仅双方均确认属于中国以外时才填非中国交易。"
+            "中国关联判断与具体地区分布是两个独立问题。分别填写 acquirer_is_chinese、target_is_chinese 的 JSON 布尔值；"
+            "可根据明确、无歧义的企业身份及稳定公开知识判断是否为中国主体。双方均为 false 就填非中国交易，"
+            "不要求能确定其具体国家、总部城市或大洲；即使 region 或 acquirer_region 为未披露，也不得因此降为待核验。"
+            "china_confidence 反映中国主体身份判断的置信度，不得沿用具体地区判断的置信度。"
+            "不确定的所在地填未披露；中国关联无法确认或排除时 china_relation 必须填待核验、confidence 填 low，"
+            "不得将所在地缺失或证据不足当作非中国交易。不得根据新闻语言、姓名或模糊印象猜测国别。"
             "只返回一个合法 JSON 对象；不要 Markdown 代码块、overview、summary、注释或尾随逗号。\n"
             f"候选：{json.dumps(candidates, ensure_ascii=False)}\n"
             f"格式示例：{json.dumps(output_format, ensure_ascii=False)}"
@@ -710,6 +729,49 @@ def normalize_ai_amount(row: Dict[str, Any], source_text: str, news_id: Any) -> 
     return localized_display, usd_millions, evidence, currency, basis
 
 
+def normalize_geography(row: Dict[str, Any], source_text: str) -> Tuple[str, str, str]:
+    """Classify China affiliation independently from the detailed region chart."""
+    def verified_region(key: str) -> str:
+        value = str(row.get(key) or "未披露").strip()
+        evidence = str(row.get(f"{key}_evidence") or "").strip()
+        confidence = str(row.get(f"{key}_confidence") or "low").strip().lower()
+        if value in REGIONS and (exact_source_excerpt(evidence, source_text) or confidence == "high"):
+            return value
+        return "未披露"
+
+    region = verified_region("region")
+    acquirer_region = verified_region("acquirer_region")
+    relation = str(row.get("china_relation") or "待核验").strip()
+    evidence = str(row.get("china_evidence") or "").strip()
+    confidence = str(row.get("china_confidence") or "low").strip().lower()
+    china_verified = exact_source_excerpt(evidence, source_text) or confidence == "high"
+    if relation not in CHINA_RELATIONS or not china_verified:
+        relation = "待核验"
+    known_regions = set(REGIONS) - {"未披露", "跨区域"}
+    buyer_chinese = row.get("acquirer_is_chinese") if china_verified else None
+    target_chinese = row.get("target_is_chinese") if china_verified else None
+    # Reject string values such as "false": they are truthy in Python.
+    buyer_chinese = buyer_chinese if type(buyer_chinese) is bool else None
+    target_chinese = target_chinese if type(target_chinese) is bool else None
+    if acquirer_region in known_regions:
+        buyer_chinese = acquirer_region == "中国"
+    if region in known_regions:
+        target_chinese = region == "中国"
+    if buyer_chinese is True:
+        acquirer_region = "中国"
+    if target_chinese is True:
+        region = "中国"
+    if buyer_chinese is not None and target_chinese is not None:
+        if target_chinese:
+            relation = "中国境内交易" if buyer_chinese else "外资收购中国标的"
+        else:
+            relation = "中国企业海外并购" if buyer_chinese else "非中国交易"
+    elif (buyer_chinese is True or target_chinese is True) and relation == "非中国交易":
+        # Positive China evidence takes precedence over a contradictory label.
+        relation = "待核验"
+    return region, relation, acquirer_region
+
+
 def normalize_deal(news: News, row: Dict[str, Any]) -> Optional[Deal]:
     acquirer, target = str(row.get("acquirer") or "").strip(), str(row.get("target") or "").strip()
     stage = str(row.get("stage") or "").strip()
@@ -730,20 +792,7 @@ def normalize_deal(news: News, row: Dict[str, Any]) -> Optional[Deal]:
     amount_display, amount_value, amount_evidence, amount_currency, amount_basis = normalize_ai_amount(
         row, source_text, news.news_id
     )
-    region = str(row.get("region") or "未披露").strip()
-    region_evidence = str(row.get("region_evidence") or "").strip()
-    region_confidence = str(row.get("region_confidence") or "low").strip().lower()
-    region_verified = exact_source_excerpt(region_evidence, source_text) or region_confidence == "high"
-    if region not in REGIONS or (region != "未披露" and not region_verified):
-        region = "未披露"
-    china_relation = str(row.get("china_relation") or "非中国交易").strip()
-    china_evidence = str(row.get("china_evidence") or "").strip()
-    china_confidence = str(row.get("china_confidence") or "low").strip().lower()
-    china_verified = exact_source_excerpt(china_evidence, source_text) or china_confidence == "high"
-    if china_relation not in CHINA_RELATIONS or (
-        china_relation != "非中国交易" and not china_verified
-    ):
-        china_relation = "非中国交易"
+    region, china_relation, acquirer_region = normalize_geography(row, source_text)
     importance = max(1, min(5, int(row.get("importance", 1))))
     transaction_date: Optional[date] = None
     transaction_date_text = str(row.get("transaction_date") or "").strip()
@@ -774,7 +823,7 @@ def normalize_deal(news: News, row: Dict[str, Any]) -> Optional[Deal]:
                 news.source or urlparse(news.url).netloc, news.url, news.published_at.astimezone(report_timezone()).date(), importance,
                 [(news.source or urlparse(news.url).netloc, news.url), *news.related_sources], deal_evidence, amount_evidence,
                 region, china_relation, transaction_date, amount_currency, amount_basis,
-                transaction_facts, deal_analysis, narrative_evidence)
+                transaction_facts, deal_analysis, narrative_evidence, acquirer_region)
 
 
 def entity_aliases(name: str) -> set[str]:
@@ -816,26 +865,69 @@ def same_entity(left: str, right: str) -> bool:
     return bool(entity_aliases(left) & entity_aliases(right))
 
 
+def datacenter_asset_identity(deal: Deal) -> Optional[Tuple[str, int, int]]:
+    """Match described assets only with a common owner and concrete footprint.
+
+    JV labels alone are not entity aliases: the same cloud provider can sell
+    different assets to the same buyer. Require both campus and shell counts.
+    """
+    compact = lambda value: re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", value.casefold())
+    target = compact(deal.target)
+    if not re.match(r"(?:aws|亚马逊云服务|amazonwebservices)", target):
+        return None
+    text = compact("\n".join((deal.target, deal.transaction_facts, deal.deal_evidence, deal.ai_summary_zh)))
+    numerals = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    def counts(pattern: str) -> set[int]:
+        return {int(n) if n.isdigit() else numerals[n] for n in re.findall(pattern, text)}
+    campuses = counts(r"(\d+|[一二两三四五六七八九十])(?:个|座)?(?:aws)?数据中心(?:合资)?园区")
+    shells = counts(r"(\d+|[一二两三四五六七八九十])(?:个|栋|座)?(?:新建)?(?:带电外壳(?:机房)?|poweredshells?)")
+    if len(campuses) != 1 or len(shells) != 1:
+        return None
+    return "aws", campuses.pop(), shells.pop()
+
+
 def same_deal(left: Deal, right: Deal) -> bool:
-    if not (same_entity(left.acquirer, right.acquirer) and same_entity(left.target, right.target)):
+    if not same_entity(left.acquirer, right.acquirer):
+        return False
+    same_target = same_entity(left.target, right.target)
+    if not same_target:
+        identity = datacenter_asset_identity(left)
+        same_target = identity is not None and identity == datacenter_asset_identity(right)
+        # Descriptive asset labels require nearby coverage even without an
+        # explicitly extracted transaction date.
+        if abs((left.published_at - right.published_at).days) > 7:
+            return False
+    if not same_target:
         return False
     # Announcements often move from rumor to signing/completion over several
     # consecutive days. Treat nearby verified dates as follow-up coverage of
     # the same buyer/target pair, while retaining distant repeat acquisitions.
     if left.transaction_date and right.transaction_date:
-        return abs((left.transaction_date - right.transaction_date).days) <= 7
+        date_gap = abs((left.transaction_date - right.transaction_date).days)
+        if date_gap <= 7:
+            return True
+        # A progress announcement can quote its own disclosure date rather
+        # than the initial transaction date. Keep explicit near-term updates
+        # with the original deal, without collapsing distant repeat purchases.
+        texts = "\n".join((left.title, left.transaction_facts, left.deal_evidence,
+                            right.title, right.transaction_facts, right.deal_evidence))
+        return date_gap <= 30 and bool(re.search(
+            r"停牌进展|重组进展|收购进展公告|交易进展公告", texts
+        )) and not re.search(r"再次收购|第二次收购|新一轮收购|另行收购|新增收购", texts)
     return True
 
 
 def merge_duplicate_deal(saved: Deal, duplicate: Deal) -> None:
     for source in duplicate.sources:
-        if source not in saved.sources:
+        if not any(source[1] == existing[1] for existing in saved.sources):
             saved.sources.append(source)
     if len(duplicate.target) > len(saved.target) and any(
-        marker in duplicate.target.casefold() for marker in ("母公司", "parent", "（", "(")
+        marker in duplicate.target.casefold() for marker in ("母公司", "parent", "（", "(", "有限公司", "有限责任公司")
     ):
         saved.target = duplicate.target
     stage_order = {"传闻/洽谈": 1, "拟议/要约": 2, "签约待交割": 3, "已完成交割": 4}
+    duplicate_more_advanced = stage_order.get(duplicate.stage, 0) > stage_order.get(saved.stage, 0)
+    same_stage = duplicate.stage == saved.stage
     duplicate_has_amount = (
         bool(duplicate.amount_display)
         and duplicate.amount_display != "未披露"
@@ -859,7 +951,7 @@ def merge_duplicate_deal(saved: Deal, duplicate: Deal) -> None:
         saved.amount_evidence = duplicate.amount_evidence
         saved.amount_currency = duplicate.amount_currency
         saved.amount_basis = duplicate.amount_basis
-    if stage_order.get(duplicate.stage, 0) > stage_order.get(saved.stage, 0):
+    if duplicate_more_advanced:
         saved.stage = duplicate.stage
     if not re.search(r"[\u4e00-\u9fff]", saved.acquirer) and re.search(r"[\u4e00-\u9fff]", duplicate.acquirer):
         saved.acquirer = duplicate.acquirer
@@ -869,17 +961,24 @@ def merge_duplicate_deal(saved: Deal, duplicate: Deal) -> None:
         saved.transaction_date = duplicate.transaction_date
     if len(duplicate.deal_evidence) > len(saved.deal_evidence):
         saved.deal_evidence = duplicate.deal_evidence
-    if len(duplicate.transaction_facts) > len(saved.transaction_facts):
+    if duplicate.transaction_facts and (
+        not saved.transaction_facts or duplicate_more_advanced
+        or (same_stage and len(duplicate.transaction_facts) > len(saved.transaction_facts))
+    ):
         saved.transaction_facts = duplicate.transaction_facts
     if len(duplicate.deal_analysis) > len(saved.deal_analysis):
         saved.deal_analysis = duplicate.deal_analysis
     for evidence in duplicate.narrative_evidence:
         if evidence not in saved.narrative_evidence:
             saved.narrative_evidence.append(evidence)
-    if saved.region == "未披露" and duplicate.region != "未披露":
+    if duplicate.region == "中国" or (saved.region == "未披露" and duplicate.region != "未披露"):
         saved.region = duplicate.region
-    if saved.china_relation == "非中国交易" and duplicate.china_relation != "非中国交易":
+    if duplicate.china_relation in CHINA_RELATIONS[:3] and saved.china_relation not in CHINA_RELATIONS[:3]:
         saved.china_relation = duplicate.china_relation
+    elif saved.china_relation == "待核验" and duplicate.china_relation != "待核验":
+        saved.china_relation = duplicate.china_relation
+    if duplicate.acquirer_region == "中国" or (saved.acquirer_region == "未披露" and duplicate.acquirer_region != "未披露"):
+        saved.acquirer_region = duplicate.acquirer_region
 
 
 def deduplicate_deals(deals: Iterable[Deal]) -> List[Deal]:
@@ -925,10 +1024,11 @@ def calculate_kpis(deals: Sequence[Deal]) -> Dict[str, Any]:
 def validate_report_reconciliation(deals: Sequence[Deal]) -> None:
     """Fail fast when report totals cannot reconcile after cleaning and deduplication."""
     total = len(deals)
-    international = [deal for deal in deals if not is_china_deal(deal)]
+    international = [deal for deal in deals if is_international_deal(deal)]
     china = [deal for deal in deals if is_china_deal(deal)]
-    if len(international) + len(china) != total:
-        raise ValueError("统计勾稽失败：全球交易数不等于国际交易数与中国相关交易数之和")
+    pending = [deal for deal in deals if not is_china_deal(deal) and not is_international_deal(deal)]
+    if len(international) + len(china) + len(pending) != total:
+        raise ValueError("统计勾稽失败：全球交易数不等于国际、中国相关与地区待核验交易数之和")
 
     kpis = calculate_kpis(deals)
     stage_total = kpis["completed"] + kpis["signed"] + kpis["proposed"] + kpis["rumored"]
@@ -1169,7 +1269,7 @@ def render_deal_item(index: int, deal: Deal, id_prefix: str = "key-deal") -> str
     title = html.escape(deal.title or f"{deal.acquirer}收购{deal.target}")
     fact, analysis = build_deal_narrative(deal)
     source_links = []
-    for source, url in deal.sources[:3]:
+    for source, url in deal.sources:
         if not url:
             continue
         source_links.append(
@@ -1323,7 +1423,7 @@ def build_compact_fact(deal: Deal) -> str:
 
 def render_compact_deal_card(index: int, deal: Deal) -> str:
     source_links = []
-    for source, url in deal.sources[:2]:
+    for source, url in deal.sources:
         if url:
             source_links.append(
                 f"<a href='{html.escape(url, quote=True)}' target='_blank' style='color:#2a67a2;text-decoration:none;font-weight:600'>"
@@ -1442,7 +1542,11 @@ def render_key_transactions(deals: Sequence[Deal], limit: int = 15, id_prefix: s
 
 
 def is_china_deal(deal: Deal) -> bool:
-    return deal.china_relation != "非中国交易" or deal.region == "中国"
+    return deal.china_relation in CHINA_RELATIONS[:3] or deal.region == "中国" or deal.acquirer_region == "中国"
+
+
+def is_international_deal(deal: Deal) -> bool:
+    return not is_china_deal(deal) and deal.china_relation == "非中国交易"
 
 
 def render_subsection(title: str, content: str, note: str = "", anchor_id: str = "") -> str:
@@ -1504,10 +1608,12 @@ def render_china_topic(deals: Sequence[Deal]) -> str:
         f"<table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='border:1px solid #dbe5f1'><tr>{cells}</tr></table>"
     ]
     relation_counts = {relation: sum(deal.china_relation == relation for deal in china_deals) for relation in CHINA_RELATIONS[:3]}
+    pending_relations = len(china_deals) - sum(relation_counts.values())
     features = [
         f"规模：共 {len(china_deals)} 笔中国相关交易，已披露美元对价合计 {format_usd_total(amount)}。",
         "结构："
         + "、".join(f"{relation} {relation_counts[relation]} 笔" for relation in CHINA_RELATIONS[:3])
+        + (f"、具体中国关联类型待核验 {pending_relations} 笔" if pending_relations else "")
         + "。",
         f"特点：主要集中于{main_sectors}；代表交易为 {representative.acquirer} → {representative.target}，金额 {representative.amount_display}。",
     ]
@@ -1521,19 +1627,11 @@ def render_china_topic(deals: Sequence[Deal]) -> str:
         "<div style='margin-top:20px;color:#173b67;font-size:15px;font-weight:600'>中国市场特点</div>"
         f"<table role='presentation' width='100%' cellspacing='0' cellpadding='0'>{feature_rows}</table>"
     )
-    key_limit = min(5, len(china_deals))
     parts.append(render_subsection(
-        "中国重点交易",
-        render_key_transactions(china_deals[:key_limit], key_limit, "china-key-deal"),
-        f"{key_limit}笔",
+        "中国交易完整清单",
+        render_key_transactions(china_deals, len(china_deals), "china-key-deal"),
+        f"{len(china_deals)}笔 · 全部按行业列示",
         anchor_id="china-key",
-    ))
-    other_deals = china_deals[key_limit:]
-    parts.append(render_subsection(
-        f"其他中国交易完整清单（{len(other_deals)}笔）",
-        render_grouped_compact_cards(other_deals, key_limit + 1),
-        "全部按行业列示",
-        anchor_id="china-other",
     ))
     return "".join(parts)
 
@@ -1560,7 +1658,7 @@ def render_china_section(china_deals: Sequence[Deal], global_total: int) -> str:
         f"<div style='font-size:22px;font-weight:700;line-height:1.35'>04｜中国相关交易｜共{len(china_deals)}笔</div>"
         "</td></tr>"
         "<tr><td style='padding:10px 14px;background:#eaf2f9;color:#52677d'>"
-        "<div style='font-size:12px;font-weight:500;line-height:1.5'>包括中国境内交易、中国企业海外并购及外资收购中国标的。</div>"
+        "<div style='font-size:12px;font-weight:500;line-height:1.5'>包括中国境内交易、中国企业海外并购及外资收购中国标的；中国范围含港澳台。</div>"
         f"<div style='margin-top:5px;font-size:13px;font-weight:600;line-height:1.5'>{len(china_deals)}笔"
         f"<span style='padding:0 10px;color:#8fb1d0'>|</span>占全球IT交易 {share:.0%}"
         f"<span style='padding:0 10px;color:#8fb1d0'>|</span>已披露美元金额 {html.escape(format_usd_total(amount))}</div>"
@@ -1572,7 +1670,7 @@ def render_china_section(china_deals: Sequence[Deal], global_total: int) -> str:
     return title
 
 
-def render_toc(international_count: int, china_count: int) -> str:
+def render_toc(international_count: int, china_count: int, pending_count: int = 0) -> str:
     items = [
         ("01", "本期重点解读", "#section-01", ""),
         ("02", "全球并购概览", "#section-02", ""),
@@ -1581,6 +1679,8 @@ def render_toc(international_count: int, china_count: int) -> str:
         ("03B", "其他国际交易", "#international-other", f"{max(0, international_count - 15)}笔"),
         ("04", "中国相关交易", "#section-04", f"{china_count}笔"),
     ]
+    if pending_count:
+        items.append(("05", "地区待核验交易", "#section-05", f"{pending_count}笔"))
     rows = "".join(
         "<tr>"
         f"<td width='52' style='padding:8px 0;border-bottom:1px solid #e7edf3;color:#4b78a9;font-size:12px;font-weight:700'>{number}</td>"
@@ -1611,8 +1711,9 @@ def render_email_html(
         previous_ordered = rank_deals([deal for deal in previous_deals if deal.industry in IT_SECTORS])
         validate_report_reconciliation(previous_ordered)
     copy = period_copy(period)
-    international_deals = [deal for deal in ordered if not is_china_deal(deal)]
+    international_deals = [deal for deal in ordered if is_international_deal(deal)]
     china_deals = [deal for deal in ordered if is_china_deal(deal)]
+    pending_deals = [deal for deal in ordered if not is_china_deal(deal) and not is_international_deal(deal)]
     methodology = (
         "<tr><td style='padding:30px 42px 0'><div style='padding:15px;background:#f7f9fb;color:#59697a;font-size:11.5px;line-height:1.7'>"
         "<div><b style='color:#40566e'>统计口径：</b>本报告统计期内公开披露的并购、控股权收购及合并交易，包括已完成、签约待交割和拟议/洽谈交易。"
@@ -1658,11 +1759,16 @@ def render_email_html(
         f"<table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='font-family:{font_stack}'><tr><td align='center' style='padding:24px 8px'>"
         f"<table id='report-shell' class='email-shell' role='presentation' width='820' cellspacing='0' cellpadding='0' style='width:820px;max-width:100%;background:#fff;box-shadow:0 8px 26px rgba(21,53,95,.08);font-family:{font_stack}'>"
         + render_header(start_date, end_date, generated_at, period)
-        + render_toc(len(international_deals), len(china_deals))
+        + render_toc(len(international_deals), len(china_deals), len(pending_deals))
         + render_section("01", "本期重点解读", render_highlights(ordered, previous_ordered))
         + render_section("02", f"全球并购概览｜共{len(ordered)}笔", render_overview(ordered))
         + render_section("03", f"国际交易｜共{len(international_deals)}笔", render_international_transactions(international_deals))
         + render_china_section(china_deals, len(ordered))
+        + (render_section(
+            "05", f"地区待核验交易｜共{len(pending_deals)}笔",
+            "<div style='padding:14px 0;color:#52677d;font-size:13px'>以下交易尚无法确认是否涉及中国主体，暂不计入国际或中国相关交易；仍纳入全球统计。具体国家或大洲缺失不影响海外交易归类。</div>"
+            + render_grouped_compact_cards(pending_deals),
+        ) if pending_deals else "")
         + methodology
         + f"<tr><td align='center' style='padding:24px 42px 28px;color:#8292a5;font-size:9px'>FOXIT STRATEGIC INTELLIGENCE · {copy['footer'].replace('&', '&amp;')} · {start_date} — {end_date}</td></tr>"
         + "</table></td></tr></table>"
@@ -1972,7 +2078,7 @@ def save_report_run(
     if args.input_json:
         return
     table = validate_table_name(args.report_runs_table)
-    international_count = sum(not is_china_deal(deal) for deal in deals)
+    international_count = sum(is_international_deal(deal) for deal in deals)
     china_count = sum(is_china_deal(deal) for deal in deals)
     report_hash = hashlib.sha256(report_html.encode("utf-8")).hexdigest()
     connection = open_db_connection(args)
